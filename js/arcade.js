@@ -75,7 +75,7 @@ function confetti() {
   box.innerHTML = Array.from({ length: 60 }, (_, i) => `<i style="left:${Math.random() * 100}%;background:${cols[i % 6]};animation-delay:${Math.random() * .6}s;animation-duration:${1.4 + Math.random()}s"></i>`).join('');
   document.body.append(box); setTimeout(() => box.remove(), 3000);
 }
-function route() { leaveRoom(); PRO = null; R = store.get('ft-arcade'); if (location.hash === '#play' && R) return R.done ? endScreen() : hubScreen(); title(); }
+function route() { leaveRoom(); PRO = null; R = store.get('ft-arcade'); if (location.hash === '#play' && R) return R.done ? endScreen() : hubScreen(); if (invitedRoom()) return multiMenu(); title(); }
 window.addEventListener('hashchange', route);
 document.addEventListener('click', e => {
   if (!Audio.ready()) { Audio.start(); Audio.setLevel(0.25); }
@@ -1405,6 +1405,12 @@ function leaveRoom() {
   MP.room = null; MP.gid = 0; MP.view = null; D = null; RC = null;
 }
 const teamOptions = sel => [...TEAMS].sort((a, b) => a.localeCompare(b)).map(t => `<option value="${esc(t)}" ${t === sel ? 'selected' : ''}>${esc(t)}</option>`).join('');
+const ROOM_CODE = /^[A-HJ-NP-Z2-9]{6}$/;
+function invitedRoom() {
+  const match = /^#room=([A-Z2-9]{6})$/i.exec(location.hash);
+  const code = match?.[1].toUpperCase() || '';
+  return ROOM_CODE.test(code) ? code : '';
+}
 
 function multiMenu(message = '') {
   leaveRoom();
@@ -1421,7 +1427,7 @@ function multiMenu(message = '') {
         <p class="lbl">🌐 ONLINE</p>
         <p class="small" id="mpstat" role="status">Create a room and share its 6-character code with a friend.</p>
         <button class="btn big y" id="mpnew">CREATE A ROOM</button>
-        <div class="joinrow"><input id="mpc" placeholder="CODE" autocomplete="off" spellcheck="false" aria-label="Room code"><button class="btn" id="mpjoin">JOIN ▶</button></div>
+        <div class="joinrow"><input id="mpc" value="${invitedRoom()}" placeholder="CODE" autocomplete="off" spellcheck="false" aria-label="Room code"><button class="btn" id="mpjoin">JOIN ▶</button></div>
       </article>
       <article class="box">
         <p class="lbl">🎮 SAME SCREEN · PENALTY DUEL</p>
@@ -1446,7 +1452,7 @@ function multiMenu(message = '') {
   }
   const connect = async host => {
     const code = c.value;
-    if (!host && !/^[A-HJ-NP-Z2-9]{6}$/.test(code)) { toast('ENTER THE 6-CHARACTER ROOM CODE'); c.focus(); return; }
+    if (!host && !ROOM_CODE.test(code)) { toast('ENTER THE 6-CHARACTER ROOM CODE'); c.focus(); return; }
     const profile = me();
     create.disabled = join.disabled = true;
     status.textContent = 'Connecting…';
@@ -1474,7 +1480,7 @@ function enterRoom(openRoom, code, host, { n, t }) {
 function onRoomClose(reason) {
   if (reason === 'full') return multiMenu('That room already has two players.');
   if (reason === 'timeout') return multiMenu('Couldn’t reach the host. Check the code and ask them to keep the room open.');
-  if (reason === 'network') return multiMenu('Couldn’t establish a direct connection. Try joining from a different network.');
+  if (reason === 'network') return multiMenu('The browsers found each other, but the connection failed. Refresh both pages and try again.');
   if (MP.host && MP.view === 'lobby') { toast('YOUR FRIEND LEFT THE ROOM'); return lobby(); }
   stopLiveMatch();
   MP.gid = 0; MP.view = 'interrupted'; D = null; RC = null;
@@ -1504,7 +1510,7 @@ function lobby() {
     <article class="box center">
       <p class="lbl">ROOM CODE</p>
       <p class="mp-code">${esc(MP.code)}</p>
-      ${MP.host ? '<button class="btn sm" id="mpcopy">COPY CODE</button><p class="small">Send this code to your friend so they can join from Multiplayer.</p>' : ''}
+      ${MP.host ? '<div class="menu row"><button class="btn sm" id="mpinvite">COPY INVITE LINK</button><button class="btn sm" id="mpcopy">COPY CODE</button></div><p class="small">Share the invite with your friend and keep this room open.</p>' : ''}
     </article>
     <article class="box">
       <p class="lbl">PLAYERS (${ps.length}/2)</p>
@@ -1521,6 +1527,13 @@ function lobby() {
   if (copy) copy.onclick = async () => {
     try { await navigator.clipboard.writeText(MP.code); toast('ROOM CODE COPIED'); }
     catch { toast('SELECT THE ROOM CODE TO COPY IT'); }
+  };
+  const invite = $('#mpinvite');
+  if (invite) invite.onclick = async () => {
+    const url = new URL(location.href);
+    url.hash = 'room=' + MP.code;
+    try { await navigator.clipboard.writeText(url.href); toast('INVITE LINK COPIED'); }
+    catch { toast('SHARE THE ROOM CODE INSTEAD'); }
   };
   const live = $('#g-live'); if (live) live.onclick = () => {
     const players = mpPeers().map(p => ({ n: pname(p), t: pteam(p) }));

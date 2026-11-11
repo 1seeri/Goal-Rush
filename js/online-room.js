@@ -3,6 +3,16 @@ import { joinRoom, selfId } from './vendor/trystero.js';
 const APP_ID = 'com.github.1seeri.goal-rush.v1';
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const RELAYS = ['wss://nos.lol', 'wss://relay.primal.net', 'wss://cdn.satellite.earth', 'wss://relay.nostrmap.net', 'wss://testr.nymble.world'];
+// Public experimental relay: https://gist.github.com/mondain/b0ec1cf5f60ae726202e?permalink_comment_id=3250340
+const TURN = [{
+  urls: [
+    'turn:turn.evan-brass.net:3478',
+    'turn:turn.evan-brass.net:3478?transport=tcp',
+    'turns:turn.evan-brass.net:443?transport=tcp',
+  ],
+  username: 'user',
+  credential: 'password',
+}];
 
 export function newRoomCode() {
   return Array.from(crypto.getRandomValues(new Uint8Array(6)), byte => CODE_CHARS[byte % CODE_CHARS.length]).join('');
@@ -10,7 +20,12 @@ export function newRoomCode() {
 
 export function openRoom(code, host, profile, { onChange, onClose, onLive }) {
   let failedWebRTC = false;
-  const room = joinRoom({ appId: APP_ID, maxReceiveBytes: 8192, relayConfig: { urls: RELAYS } }, code, {
+  const room = joinRoom({
+    appId: APP_ID,
+    maxReceiveBytes: 8192,
+    relayConfig: { urls: RELAYS },
+    turnConfig: TURN,
+  }, code, {
     onJoinError: () => { failedWebRTC = true; },
   });
   const channel = room.makeAction('goal-rush');
