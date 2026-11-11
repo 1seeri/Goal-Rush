@@ -221,12 +221,12 @@ function setupCanvas() {
 const toPix = (cv, e) => { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; };
 
 // One attacking chance. Resolves with { result: 'goal'|'saved'|'tackled'|'wide'|'intercepted'|'timeout', scorer }
-function attackChance({ me, opp, practice = false, penalty = false, kind = 'normal', pro = null }) {
+function attackChance({ me, opp, practice = false, penalty = false, kind = 'normal', pro = null, random = Math.random, deadline = Infinity, live = null }) {
   return new Promise(res => {
     const { cv, c } = setupCanvas();
     const strength = clamp(1 + (ELO[me] - ELO[opp]) / 1800, .82, 1.18), dStrength = clamp(1 + (ELO[opp] - ELO[me]) / 1800, .82, 1.2);
     const nm = names(me), colA = colour(me), colD = colour(opp) === colA ? '#F2F2F2' : colour(opp);
-    const r = Math.random;
+    const r = random;
     let atk, def, youAt = -1;
     if (penalty) { atk = [{ x: 96, y: GL + 38, name: nm[0] }]; def = []; youAt = 0; }
     else if (kind === 'counter') { atk = [{ x: 96 + (r() * 30 - 15), y: 205, name: nm[0] }, { x: 48, y: 178, name: nm[1] }, { x: 146, y: 182, name: nm[2] }]; def = [{ x: 78, y: 112 }, { x: 116, y: 100 }]; youAt = 0; }
@@ -247,11 +247,11 @@ function attackChance({ me, opp, practice = false, penalty = false, kind = 'norm
     const S = { shots: 0, skills: 0, tackled: false, touches: 0 };
     const keeper = { x: 96, y: GL + 5 };
     atk.forEach((a, i) => { a.tx = a.x; a.ty = a.y; a.run = i > 0; });
-    let carrier = 0, ball = { x: atk[0].x, y: atk[0].y - 6, vx: 0, vy: 0 }, t = 0, over = null, lastKick = null, touched = new Set(), last = performance.now(), dive = null, raf = 0;
+    let carrier = 0, ball = { x: atk[0].x, y: atk[0].y - 6, vx: 0, vy: 0 }, t = 0, over = null, lastKick = null, touched = new Set(), last = performance.now(), dive = null;
     let mode = null, aim = null, drib = null, downAt = 0, downPos = null, boost = 0, combo = 0, gotAt = 0, shake = 0, receiver = -1;
     const pops = [], keys = new Set();
     const pop = (txt, x, y, col = '#FFE27A') => pops.push({ txt, x, y, t: 0, col });
-    const limit = penalty || kind === 'freekick' ? 99 : kind === 'solo' ? 6 : kind === 'counter' ? 8 : 10;
+    const limit = penalty || kind === 'freekick' ? 99 : kind === 'solo' ? 6 : kind === 'counter' && !live ? 8 : 10;
     const end = (result, scorer) => { if (over) return; if (result === 'tackled' && isYou(carrier)) S.tackled = true; over = { result, scorer, t, combo, S }; };
     const cpos = () => carrier != null ? atk[carrier] : null;
     if (/[?&]debug/.test(location.search)) window.__arc = () => ({ atk: atk.map(p => ({ x: p.x, y: p.y })), carrier, combo, over: over?.result, ball: { ...ball }, receiver, lk: lastKick, t });
@@ -269,6 +269,7 @@ function attackChance({ me, opp, practice = false, penalty = false, kind = 'norm
         SFX.kick(); shake = 3;
         if (oneTouch) pop('ONE-TOUCH!', ball.x, ball.y - 10);
         else if (d > 120) pop('FROM DISTANCE!', ball.x, ball.y - 10, '#FFFFFF');
+        if (live) return;
         // the keeper reads it; passing moves and one-touch finishes make him slower
         const cross = ball.x + ball.vx * Math.max(0, (ball.y - keeper.y) / Math.max(1, -ball.vy));
         const err = (penalty ? 0 : 22) * (1 + .3 * combo + (oneTouch ? .6 : 0)) / dStrength * (me2 ? PS.shoot * (PS.perks.includes('clinical') ? 1.35 : 1) : 1);
@@ -294,13 +295,13 @@ function attackChance({ me, opp, practice = false, penalty = false, kind = 'norm
     };
     cv.onpointercancel = () => { mode = null; aim = null; drib = null; };
     // phone controller: right pad aims on a mini pitch, left stick dribbles
-    PAD.onAim = (ph, x, y) => {
+    if (!live) PAD.onAim = (ph, x, y) => {
       const p = { x: x * W, y: y * H };
       if (ph === 'down') { if (carrier == null || over) return; mode = 'aim'; aim = p; downAt = performance.now(); downPos = p; }
       else if (ph === 'move') { if (mode === 'aim') aim = p; }
       else if (ph === 'up') { if (mode === 'aim' && carrier != null) { kick(p.x, p.y); padBuzz([30]); } mode = null; aim = null; }
     };
-    PAD.onSkill = () => { if (!penalty && kind !== 'freekick') { skill(); padBuzz([20, 30, 20]); } };
+    if (!live) PAD.onSkill = () => { if (!penalty && kind !== 'freekick') { skill(); padBuzz([20, 30, 20]); } };
     let lastPos = 0;
     const onKey = e => { if (/^(Arrow|Key[WASD])/.test(e.code)) { e.type === 'keydown' ? keys.add(e.code) : keys.delete(e.code); e.preventDefault(); } if (e.type === 'keydown' && e.code === 'Space' && carrier != null) { e.preventDefault(); kick(96 + (r() - .5) * 30, GL - 2); } };
     window.addEventListener('keydown', onKey); window.addEventListener('keyup', onKey);
@@ -327,7 +328,7 @@ function attackChance({ me, opp, practice = false, penalty = false, kind = 'norm
         if (penalty) return;
         if (i === carrier) {
           let vx = 0, vy = 0;
-          const stick = Math.hypot(PAD.sx, PAD.sy) > .2;
+          const stick = !live && Math.hypot(PAD.sx, PAD.sy) > .2;
           const kx = stick ? PAD.sx : (keys.has('ArrowRight') || keys.has('KeyD')) - (keys.has('ArrowLeft') || keys.has('KeyA')), ky = stick ? PAD.sy : (keys.has('ArrowDown') || keys.has('KeyS')) - (keys.has('ArrowUp') || keys.has('KeyW'));
           if (kind === 'freekick') { ball.x = a.x + 1; ball.y = a.y - 4; return; }
           const sp = (mode === 'drib' || kx || ky ? 36 : 17) * strength * (boost ? 1.8 : 1) * (isYou(i) ? PS.pace : 1);
@@ -366,7 +367,11 @@ function attackChance({ me, opp, practice = false, penalty = false, kind = 'norm
           }
         }
       });
-      if (dive) { const dd = dive.x - keeper.x; keeper.x += Math.sign(dd) * Math.min(Math.abs(dd), dive.speed * dt); }
+      if (live) {
+        const dx = live.keeperX - keeper.x;
+        keeper.x += clamp(dx, -82 * dt, 82 * dt);
+        keeper.moving = Math.abs(dx) > .5;
+      } else if (dive) { const dd = dive.x - keeper.x; keeper.x += Math.sign(dd) * Math.min(Math.abs(dd), dive.speed * dt); }
       else { const tx = clamp(ball.x, POST_L + 6, POST_R - 6); keeper.x += Math.sign(tx - keeper.x) * Math.min(Math.abs(tx - keeper.x), 30 * dt); }
       if (freeBall) {
         ball.x += ball.vx * dt; ball.y += ball.vy * dt;
@@ -385,7 +390,7 @@ function attackChance({ me, opp, practice = false, penalty = false, kind = 'norm
           if (sp < 14 && carrier == null) end('loose');
         }
         if (carrier == null) {
-          if (ball.y <= keeper.y + 2 && ball.y > GL - 4 && Math.abs(keeper.x - ball.x) < (dive ? 8 : 6)) { ball.vy = Math.abs(ball.vy) * .5; ball.vx *= -.4; end('saved'); shake = 2; }
+          if (ball.y <= keeper.y + 2 && ball.y > GL - 4 && Math.abs(keeper.x - ball.x) < (live || dive ? 8 : 6)) { ball.vy = Math.abs(ball.vy) * .5; ball.vx *= -.4; end('saved'); shake = 2; }
           else if (ball.y <= GL) { if (ball.x > POST_L && ball.x < POST_R) { const si = lastKick?.by ?? 0, ai = atk[si].from; end('goal', atk[si].name); over.you = isYou(si); over.assist = ai != null && ai !== si ? atk[ai].name : null; over.assistYou = ai != null && ai !== si && isYou(ai); shake = 6; } else end('wide'); }
           else if (ball.x < 0 || ball.x > W || ball.y > H) end('wide');
           else if (penalty && sp < 20) end('saved');
@@ -397,7 +402,7 @@ function attackChance({ me, opp, practice = false, penalty = false, kind = 'norm
     let trail = [];
     function draw(now) {
       c.save();
-      if (shake > 0) c.translate(Math.round((r() - .5) * shake), Math.round((r() - .5) * shake));
+      if (shake > 0) c.translate(Math.round((Math.random() - .5) * shake), Math.round((Math.random() - .5) * shake));
       drawPitch(c, false);
       trail = trail.filter(p => (p.a -= .06) > 0);
       trail.forEach(p => { c.fillStyle = `rgba(255,255,255,${p.a * .7})`; c.fillRect(Math.round(p.x), Math.round(p.y), 1, 1); });
@@ -424,26 +429,39 @@ function attackChance({ me, opp, practice = false, penalty = false, kind = 'norm
       c.restore();
       if (!penalty) { c.fillStyle = 'rgba(0,0,0,.4)'; c.fillRect(0, H - 3, W, 3); c.fillStyle = t > limit - 2.5 ? '#FF5252' : '#FFD23F'; c.fillRect(0, H - 3, W * Math.max(0, 1 - t / limit), 3); }
       if (combo >= 2) { c.fillStyle = '#FFD23F'; c.font = '8px monospace'; c.fillText(`COMBO x${combo}`, W - 52, H - 7); }
-      if (mode === 'aim') { c.fillStyle = 'rgba(20,22,43,.22)'; c.fillRect(0, 0, W, H); c.fillStyle = '#FFD23F'; c.fillText('SLOW-MO', 4, H - 7); }
+      if (mode === 'aim' && !live) { c.fillStyle = 'rgba(20,22,43,.22)'; c.fillRect(0, 0, W, H); c.fillStyle = '#FFD23F'; c.fillText('SLOW-MO', 4, H - 7); }
     }
+    const finish = () => {
+      cv.onpointerdown = cv.onpointermove = cv.onpointerup = cv.onpointercancel = null;
+      if (!live) { PAD.onAim = PAD.onSkill = null; padMode('menu', 'Press A to continue'); }
+      window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKey);
+      res(over);
+    };
+    let lastLiveFrame = -Infinity;
     function frame(now) {
+      if ((live || deadline !== Infinity) && !cv.isConnected) return finish();
+      if (!over && Date.now() >= deadline) {
+        if (!live) return finish();
+        end('timeout');
+      }
       const dt = Math.min(.05, (now - last) / 1000); last = now;
-      if (!over || now - over.shown < 1100) update(dt * (mode === 'aim' ? .25 : 1));
+      if (!over || (!live && now - over.shown < 1100)) update(dt * (!live && mode === 'aim' ? .25 : 1));
       draw(now);
-      if (PAD.connected) {
+      if (live && (now - lastLiveFrame >= 40 || (over && !over.shown))) {
+        lastLiveFrame = now;
+        const player = p => [Math.round(p.x), Math.round(p.y), !!p.moving];
+        live.publish({ a: atk.map(player), d: def.map(player), k: player(keeper), b: [Math.round(ball.x), Math.round(ball.y)], carrier, receiver, time: Math.max(0, Math.ceil(limit - t)) });
+      }
+      if (!live && PAD.connected) {
         padMode('attack', over ? '' : carrier == null ? 'Ball moving…' : penalty ? 'PENALTY: touch the goal where you want it' : kind === 'freekick' ? 'FREE KICK: touch where to curl it' : 'Left: run · Right: touch where to pass/shoot');
         if (now - lastPos > 66) { lastPos = now; const q = v => Math.round(v * 10) / 10; padSend({ t: 'pos', b: [q(ball.x), q(ball.y)], a: atk.map((a, i) => [q(a.x), q(a.y), i === carrier ? 2 : a.you ? 1 : 0]), d: def.map(d => [q(d.x), q(d.y)]), k: [q(keeper.x), q(keeper.y)], aim: mode === 'aim' && aim ? [q(aim.x), q(aim.y)] : null }); }
       }
       $('#hint').textContent = over ? '' : carrier != null ? (penalty || kind === 'freekick' ? (kind === 'freekick' ? 'FREE KICK! DRAG TO AIM. GET IT PAST THE WALL' : 'DRAG TO AIM, RELEASE TO SHOOT') : kind === 'solo' ? '1 ON 1! DRAG TO DRIBBLE, DRAG AWAY TO SHOOT' : `${surname(atk[carrier].name)}: DRAG HIM TO DRIBBLE · DRAG AWAY TO PASS/SHOOT · TAP HIM = SKILL`) : '…';
       if (over && !over.shown) over.shown = now;
-      if (over && now - over.shown > 1100) {
-        cancelAnimationFrame(raf); cv.onpointerdown = cv.onpointermove = cv.onpointerup = null; PAD.onAim = PAD.onSkill = null; padMode('menu', 'Press A to continue');
-        window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKey);
-        return res(over);
-      }
-      raf = requestAnimationFrame(frame);
+      if (over && now - over.shown > 1100) return finish();
+      requestAnimationFrame(frame);
     }
-    raf = requestAnimationFrame(frame);
+    requestAnimationFrame(frame);
   });
 }
 
@@ -1370,30 +1388,25 @@ function shopScreen() {
 }
 
 // =============================================================
-//  MULTIPLAYER. Online through the artifact's room (presence only,
-//  so anyone who can open the page can play), or a penalty duel
-//  on one screen. Two modes online:
-//   • PENALTY DUEL: 1v1. The shooter picks a spot, the keeper picks
-//     a dive, both in secret; when both are in, every screen works
-//     out the same result from the same numbers.
-//   • GOAL RACE: everyone plays the same attacking chances for 60s.
+//  MULTIPLAYER. Two-player WebRTC rooms and same-screen duels.
+//   • LIVE MATCH: one player attacks while the other controls the keeper.
+//   • GOAL RACE: both players get the same attacking chances for 60s.
 // =============================================================
-const roomP = (async () => { try { return window.claude?.use ? await window.claude.use('room') : null; } catch { return null; } })();
-const MP = { room: null, code: '', name: '', team: '', host: false, gid: 0, view: null, unsub: [] };
+const MP = { room: null, code: '', host: false, gid: 0, view: null };
 const hashN = s => { let h = 2166136261; for (const c of String(s)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return (h >>> 0) / 4294967296; };
-const mpPeers = () => (MP.room ? MP.room.peers() : []).filter(p => p.kind === 'viewer' && typeof p.presence?.n === 'string').sort((a, b) => (+a.presence.at || 0) - (+b.presence.at || 0));
+const mpPeers = () => MP.room?.peers() || [];
 const hostPeer = () => mpPeers().find(p => p.presence.host === true);
-const myPeer = () => (MP.room ? MP.room.peers() : []).find(p => p.sameTab)?.peer;
+const myPeer = () => MP.room?.self;
 const pname = p => String(p.presence.n || 'PLAYER').toUpperCase().replace(/[^A-Z0-9 .'-]/g, '').slice(0, 12) || 'PLAYER';
 const pteam = p => TEAMS.includes(p.presence.t) ? p.presence.t : TEAMS[0];
 function leaveRoom() {
-  MP.unsub.forEach(u => { try { u(); } catch {} }); MP.unsub = [];
-  if (MP.room) MP.room.leave().catch(() => {});
+  MP.room?.leave();
+  stopLiveMatch();
   MP.room = null; MP.gid = 0; MP.view = null; D = null; RC = null;
 }
 const teamOptions = sel => [...TEAMS].sort((a, b) => a.localeCompare(b)).map(t => `<option value="${esc(t)}" ${t === sel ? 'selected' : ''}>${esc(t)}</option>`).join('');
 
-async function multiMenu() {
+function multiMenu(message = '') {
   leaveRoom();
   const pref = store.get('gr-mp') || {};
   const t1 = TEAMS.includes(pref.t) ? pref.t : (PRO_SAVED() ? store.get('ft-pro').team : 'Brazil'), t2 = TEAMS.includes(pref.t2) ? pref.t2 : 'Argentina';
@@ -1406,9 +1419,9 @@ async function multiMenu() {
     <div class="mp-grid">
       <article class="box">
         <p class="lbl">🌐 ONLINE</p>
-        <p class="small" id="mpstat">Connecting…</p>
-        <button class="btn big y" id="mpnew" disabled>CREATE A GAME</button>
-        <div class="joinrow"><input id="mpc" maxlength="4" placeholder="CODE" autocomplete="off" aria-label="Game code"><button class="btn" id="mpjoin" disabled>JOIN ▶</button></div>
+        <p class="small" id="mpstat" role="status">Create a room and share its 6-character code with a friend.</p>
+        <button class="btn big y" id="mpnew">CREATE A ROOM</button>
+        <div class="joinrow"><input id="mpc" placeholder="CODE" autocomplete="off" spellcheck="false" aria-label="Room code"><button class="btn" id="mpjoin">JOIN ▶</button></div>
       </article>
       <article class="box">
         <p class="lbl">🎮 SAME SCREEN · PENALTY DUEL</p>
@@ -1421,64 +1434,97 @@ async function multiMenu() {
     <div class="menu row"><a class="btn" href="#" data-go="home">◀ MENU</a></div>
   </section>`);
   const me = () => { const n = ($('#mpn').value.trim() || 'PLAYER 1').toUpperCase().replace(/[^A-Z0-9 .'-]/g, '').slice(0, 12) || 'PLAYER 1', t = $('#mpt').value, n2 = ($('#mpn2').value.trim() || 'PLAYER 2').toUpperCase().replace(/[^A-Z0-9 .'-]/g, '').slice(0, 12) || 'PLAYER 2', t2 = $('#mpt2').value; store.set('gr-mp', { n: $('#mpn').value.trim(), t, n2: $('#mpn2').value.trim(), t2 }); return { n, t, n2, t2 }; };
-  $('#mplocal').onclick = () => { const p = me(); MP.view = 'duel'; duelStart({ id: Date.now(), local: true, seed: Math.random(), A: { n: p.n, t: p.t }, B: { n: p.n2, t: p.t2 } }); };
-  const c = $('#mpc'); c.oninput = () => (c.value = c.value.toUpperCase().replace(/[^A-Z]/g, ''));
-  const room = await roomP;
-  if (!$('#mpstat')) return;
-  if (!room) { $('#mpstat').innerHTML = 'Online play works when this page is opened on Claude. Same-screen duels work anywhere.'; return; }
-  $('#mpstat').innerHTML = 'Make a game and send the 4-letter code to a friend. They need to be able to open this page too.';
-  $('#mpnew').disabled = $('#mpjoin').disabled = false;
-  $('#mpnew').onclick = () => { const p = me(); enterRoom(Array.from({ length: 4 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.floor(Math.random() * 24)]).join(''), true, p); };
-  $('#mpjoin').onclick = () => { const p = me(), code = c.value.trim(); if (code.length !== 4) { toast('TYPE THE 4-LETTER CODE'); c.focus(); return; } enterRoom(code, false, p); };
+  $('#mplocal').onclick = () => { const p = me(); duelStart({ id: Date.now(), seed: Math.random(), A: { n: p.n, t: p.t }, B: { n: p.n2, t: p.t2 } }); };
+  const c = $('#mpc');
+  c.oninput = () => { c.value = c.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6); };
+  const status = $('#mpstat'), create = $('#mpnew'), join = $('#mpjoin');
+  if (typeof message === 'string' && message) status.textContent = message;
+  if (!window.isSecureContext || !window.RTCPeerConnection) {
+    status.textContent = 'Online play requires a WebRTC-capable browser and HTTPS or localhost.';
+    create.disabled = join.disabled = true;
+    return;
+  }
+  const connect = async host => {
+    const code = c.value;
+    if (!host && !/^[A-HJ-NP-Z2-9]{6}$/.test(code)) { toast('ENTER THE 6-CHARACTER ROOM CODE'); c.focus(); return; }
+    const profile = me();
+    create.disabled = join.disabled = true;
+    status.textContent = 'Connecting…';
+    try {
+      const { openRoom, newRoomCode } = await import('./online-room.js');
+      if (!status.isConnected) return;
+      enterRoom(openRoom, host ? newRoomCode() : code, host, profile);
+    } catch (error) {
+      console.error(error);
+      status.textContent = 'Couldn’t open online play. Try again.';
+      create.disabled = join.disabled = false;
+    }
+  };
+  create.onclick = () => connect(true);
+  join.onclick = () => connect(false);
   c.onkeydown = e => { if (e.key === 'Enter') $('#mpjoin').click(); };
 }
 
-async function enterRoom(code, host, p) {
-  const room = await roomP; if (!room) return;
-  let r; try { r = await room.join('gr-' + code.toLowerCase()); } catch (e) { toast(`COULDN’T JOIN (${esc(e?.code || 'error')})`); return; }
-  MP.room = r; MP.code = code; MP.host = host; MP.name = p.n; MP.team = p.t; MP.gid = 0; MP.view = 'lobby';
-  r.presence({ n: p.n, t: p.t, host, at: Date.now(), game: null, pk: null, rs: null }).catch(() => {});
-  MP.unsub.push(r.onPeers(onRoom, e => { toast('CONNECTION LOST'); multiMenu(); }));
+function enterRoom(openRoom, code, host, { n, t }) {
+  MP.room = openRoom(code, host, { n, t }, { onChange: onRoom, onClose: onRoomClose, onLive: onLiveMessage });
+  MP.code = code; MP.host = host; MP.gid = 0;
   lobby();
+}
+
+function onRoomClose(reason) {
+  if (reason === 'full') return multiMenu('That room already has two players.');
+  if (reason === 'timeout') return multiMenu('Couldn’t reach the host. Check the code and ask them to keep the room open.');
+  if (reason === 'network') return multiMenu('Couldn’t establish a direct connection. Try joining from a different network.');
+  if (MP.host && MP.view === 'lobby') { toast('YOUR FRIEND LEFT THE ROOM'); return lobby(); }
+  stopLiveMatch();
+  MP.gid = 0; MP.view = 'interrupted'; D = null; RC = null;
+  render(`<section class="end">
+    <h1 class="finish">${MP.host ? 'PLAYER DISCONNECTED' : 'HOST DISCONNECTED'}</h1>
+    <div class="menu row"><button class="btn big y" id="room-back">${MP.host ? 'BACK TO LOBBY' : 'MULTIPLAYER MENU'}</button></div>
+  </section>`);
+  $('#room-back').onclick = MP.host ? hostToLobby : multiMenu;
 }
 
 function onRoom() {
   if (!MP.room) return;
   const h = hostPeer(), g = h?.presence?.game;
   if (g && typeof g === 'object' && g.id && g.id !== MP.gid && !MP.host) { MP.gid = g.id; return startGame(g); }
-  if (!MP.host && !g && MP.gid && /^(duelEnd|raceEnd|race|duel)$/.test(MP.view || '')) { MP.gid = 0; return lobby(); }
+  if (!MP.host && !g && MP.gid) { MP.gid = 0; return lobby(); }
   if (MP.view === 'lobby') lobby();
-  else if (MP.view === 'duel') duelCheck();
   else if (MP.view === 'race') raceBoard();
   else if (MP.view === 'raceEnd') raceEnd();
 }
 
 function lobby() {
+  stopLiveMatch();
   MP.view = 'lobby'; D = null; RC = null;
   const ps = mpPeers(), h = hostPeer(), mine = myPeer();
   render(`<section class="career-sec mp">
     <h2 class="screen-title">GAME LOBBY</h2>
     <article class="box center">
-      <p class="lbl">GAME CODE</p>
+      <p class="lbl">ROOM CODE</p>
       <p class="mp-code">${esc(MP.code)}</p>
-      <p class="small">Your friend opens this page, taps <b>MULTIPLAYER</b>, types <b>${esc(MP.code)}</b> and taps JOIN.</p>
+      ${MP.host ? '<button class="btn sm" id="mpcopy">COPY CODE</button><p class="small">Send this code to your friend so they can join from Multiplayer.</p>' : ''}
     </article>
     <article class="box">
-      <p class="lbl">PLAYERS (${ps.length})</p>
+      <p class="lbl">PLAYERS (${ps.length}/2)</p>
       <ul class="plist">${ps.map(p => `<li style="${kit(pteam(p))}"><span class="crest-px sm" style="${kit(pteam(p))}">${code(pteam(p))}</span><b>${esc(pname(p))}</b>${p.presence.host ? '<em>HOST</em>' : ''}${p.peer === mine ? '<em class="you">YOU</em>' : ''}</li>`).join('') || '<li class="dim">Connecting…</li>'}</ul>
-      ${!h && !MP.host ? '<p class="small">Waiting for the host… check the code is right.</p>' : ''}
     </article>
     ${MP.host ? `<div class="mp-grid">
-      <article class="box"><p class="lbl">🥅 PENALTY DUEL · 1 V 1</p><p class="small">Take turns: one shoots, the other dives. Both pick in secret. Best of 5, then sudden death.</p><button class="btn big y" id="g-duel" ${ps.length < 2 ? 'disabled' : ''}>${ps.length < 2 ? 'WAITING FOR A FRIEND…' : 'START DUEL ▶'}</button></article>
-      <article class="box"><p class="lbl">⚡ GOAL RACE · EVERYONE</p><p class="small">Same team, same chances, 60 seconds. Most goals wins. Anyone in the lobby can play.</p><button class="btn big y" id="g-race">START RACE ▶</button></article>
-    </div>` : `<p class="hint">WAITING FOR THE HOST TO START…</p>`}
+      <article class="box"><p class="lbl">⚽ LIVE MATCH · 1 V 1</p><p class="small">One player dribbles, passes and shoots while the other moves the keeper. Possession switches after each play.</p><button class="btn big y" id="g-live" ${ps.length < 2 ? 'disabled' : ''}>${ps.length < 2 ? 'WAITING FOR A FRIEND…' : 'START MATCH ▶'}</button></article>
+      <article class="box"><p class="lbl">⚡ GOAL RACE · 1 V 1</p><p class="small">Same team, same chances, 60 seconds. Most goals wins.</p><button class="btn big y" id="g-race" ${ps.length < 2 ? 'disabled' : ''}>START RACE ▶</button></article>
+    </div>` : `<p class="hint" role="status">${h ? 'WAITING FOR THE HOST TO START…' : 'CONNECTING TO THE HOST…'}</p>`}
     <div class="menu row"><button class="btn" id="mpleave">LEAVE</button></div>
   </section>`);
   $('#mpleave').onclick = multiMenu;
-  const gd = $('#g-duel'); if (gd) gd.onclick = () => {
-    const ps2 = mpPeers(), me = ps2.find(p => p.peer === myPeer()), other = ps2.find(p => p.peer !== myPeer());
-    if (!me || !other) return toast('NEED 2 PLAYERS');
-    hostStart({ mode: 'duel', A: { peer: me.peer, n: pname(me), t: pteam(me) }, B: { peer: other.peer, n: pname(other), t: pteam(other) } });
+  const copy = $('#mpcopy');
+  if (copy) copy.onclick = async () => {
+    try { await navigator.clipboard.writeText(MP.code); toast('ROOM CODE COPIED'); }
+    catch { toast('SELECT THE ROOM CODE TO COPY IT'); }
+  };
+  const live = $('#g-live'); if (live) live.onclick = () => {
+    const players = mpPeers().map(p => ({ n: pname(p), t: pteam(p) }));
+    hostStart({ mode: 'live', players, first: 0 });
   };
   const gr = $('#g-race'); if (gr) gr.onclick = () => {
     const top = [...TEAMS].sort((a, b) => RANK[a] - RANK[b]), ta = top[Math.floor(Math.random() * 12)];
@@ -1487,20 +1533,185 @@ function lobby() {
   };
 }
 function hostStart(g) {
+  if (!MP.host || mpPeers().length !== 2) return hostToLobby();
   g.id = Date.now() * 10 + Math.floor(Math.random() * 10); g.seed = Math.random();
-  MP.gid = g.id; MP.room.presence({ game: g }).catch(() => {});
+  MP.gid = g.id; MP.room.update({ game: g, rs: null });
   startGame(g);
 }
-function hostToLobby() { MP.gid = 0; MP.room?.presence({ game: null }).catch(() => {}); lobby(); }
+function hostToLobby() { MP.gid = 0; MP.room?.update({ game: null, rs: null }); lobby(); }
 function startGame(g) {
-  if (g.mode === 'duel' && g.A && g.B) {
-    const me = myPeer();
-    duelStart({ id: g.id, local: false, seed: Number(g.seed) || 0, A: { peer: String(g.A.peer), n: String(g.A.n).slice(0, 12), t: TEAMS.includes(g.A.t) ? g.A.t : TEAMS[0] }, B: { peer: String(g.B.peer), n: String(g.B.n).slice(0, 12), t: TEAMS.includes(g.B.t) ? g.B.t : TEAMS[1] }, me: me === g.A.peer ? 'A' : me === g.B.peer ? 'B' : null });
-  } else if (g.mode === 'race' && TEAMS.includes(g.ta) && TEAMS.includes(g.tb)) raceStart({ id: g.id, ta: g.ta, tb: g.tb, dur: clamp(+g.dur || 60, 20, 120) });
+  if (g.mode === 'live' && Array.isArray(g.players) && g.players.length === 2 && g.players.every(p => TEAMS.includes(p?.t) && typeof p.n === 'string')) {
+    liveStart(g);
+  } else if (g.mode === 'race' && TEAMS.includes(g.ta) && TEAMS.includes(g.tb)) raceStart({ id: g.id, ta: g.ta, tb: g.tb, dur: clamp(+g.dur || 60, 20, 120), seed: Number(g.seed) || 0 });
 }
 const endButtons = (again) => MP.room
   ? (MP.host ? `<button class="btn big y" id="again">REMATCH ▶</button><button class="btn" id="tolobby">LOBBY</button>` : `<p class="hint">WAITING FOR THE HOST…</p><button class="btn" id="mpleave">LEAVE</button>`)
   : `<button class="btn big y" id="again">${again}</button><button class="btn" id="mpback">MULTIPLAYER MENU</button>`;
+
+// ---------- live match ----------
+const LIVE_POSSESSIONS = 6;
+const LIVE_RESULTS = { goal: 'GOAL!', saved: 'SAVED!', tackled: 'TACKLED!', wide: 'WIDE!', intercepted: 'INTERCEPTED!', loose: 'LOST THE BALL!', timeout: 'TIME’S UP!' };
+let liveMatch = null;
+
+function stopLiveMatch() {
+  if (!liveMatch) return;
+  clearTimeout(liveMatch.timer);
+  liveMatch.stopDefense?.();
+  liveMatch = null;
+}
+
+function liveStart(game) {
+  stopLiveMatch();
+  const match = { game, score: [0, 0], first: game.first === 1 ? 1 : 0 };
+  liveMatch = match;
+  MP.view = 'live';
+  livePossession(match, 0);
+}
+
+function liveSend(match, type, data) {
+  MP.room?.live({ id: match.game.id, play: match.play, type, data });
+}
+
+async function livePossession(match, play) {
+  match.stopDefense?.();
+  match.play = play;
+  match.attacker = (match.first + play) % 2;
+  match.attacking = match.attacker === (MP.host ? 0 : 1);
+  match.stage = 'playing';
+  match.keeperX = W / 2;
+  const [home, away] = match.game.players;
+  const attack = match.game.players[match.attacker], defense = match.game.players[1 - match.attacker];
+  const role = match.attacking ? 'YOU ATTACK' : 'YOU DEFEND';
+  render(`<section class="amatch live-match">
+    <div class="board"><div class="side" style="${kit(home.t)}"><b>${code(home.t)}</b></div>
+      <div class="score"><b id="s0">${match.score[0]}</b><i>-</i><b id="s1">${match.score[1]}</b><span id="clock">10s</span></div>
+      <div class="side away" style="${kit(away.t)}"><b>${code(away.t)}</b></div></div>
+    <p class="lbl center" id="live-role">${role} · POSSESSION ${play + 1}/${LIVE_POSSESSIONS}</p>
+    <div class="arena"><canvas id="cv" aria-label="${match.attacking ? 'Drag to dribble, pass or shoot' : 'Drag left or right to move your keeper'}"></canvas><div class="banner" id="banner"></div></div>
+    <p class="hint" id="hint">${match.attacking ? 'DRAG TO DRIBBLE, PASS OR SHOOT' : 'DRAG LEFT OR RIGHT TO MOVE THE KEEPER'}</p>
+    <div class="menu row"><button class="btn sm" id="quit">LEAVE GAME</button></div>
+  </section>`);
+  $('#quit').onclick = multiMenu;
+  idlePitch();
+  banner(role, `${esc(attack.n)} ON THE BALL`);
+  if (!match.attacking) liveDefense(match, attack.t, defense.t);
+  if (MP.host) match.timer = setTimeout(() => liveResolve(match, 'timeout'), 15000);
+
+  await wait(650);
+  if (liveMatch !== match || match.play !== play || match.stage !== 'playing') return;
+  hideBanner();
+  if (!match.attacking) return;
+  match.publish = frame => {
+    if (liveMatch !== match || match.play !== play || match.stage !== 'playing') return;
+    $('#clock').textContent = frame.time + 's';
+    liveSend(match, 'frame', frame);
+  };
+  const result = await attackChance({ me: attack.t, opp: defense.t, kind: 'counter', live: match, deadline: Date.now() + 10000 });
+  if (!result || liveMatch !== match || match.play !== play || match.stage !== 'playing') return;
+  if (MP.host) liveResolve(match, result.result);
+  else liveSend(match, 'result', result.result);
+}
+
+function liveDefense(match, attack, defense) {
+  const { cv, c } = setupCanvas();
+  const colA = colour(attack), colD = colour(defense) === colA ? '#F2F2F2' : colour(defense);
+  const keeperColour = gkCol(colA, colD);
+  let dragging = false, lastMove = -Infinity, target = W / 2;
+  const move = x => {
+    target = clamp(x, POST_L + 2, POST_R - 2);
+    liveSend(match, 'keeper', target);
+  };
+  const pointer = e => move(toPix(cv, e).x);
+  cv.onpointerdown = e => { dragging = true; cv.setPointerCapture(e.pointerId); pointer(e); };
+  cv.onpointermove = e => {
+    if (!dragging || performance.now() - lastMove < 40) return;
+    lastMove = performance.now();
+    pointer(e);
+  };
+  cv.onpointerup = e => { if (dragging) pointer(e); dragging = false; };
+  cv.onpointercancel = () => { dragging = false; };
+  const keyboard = e => {
+    const dx = ['ArrowLeft', 'KeyA'].includes(e.code) ? -7 : ['ArrowRight', 'KeyD'].includes(e.code) ? 7 : 0;
+    if (dx) { e.preventDefault(); move(target + dx); }
+  };
+  window.addEventListener('keydown', keyboard);
+  match.stopDefense = () => {
+    window.removeEventListener('keydown', keyboard);
+    cv.onpointerdown = cv.onpointermove = cv.onpointerup = cv.onpointercancel = null;
+    match.drawDefense = match.stopDefense = null;
+  };
+  match.drawDefense = frame => {
+    const now = performance.now() / 1000;
+    const draw = ([x, y, moving], colour, skin, highlight = false) => drawMan(c, { x, y, moving }, colour, false, skin, highlight, now);
+    drawPitch(c, false);
+    frame.d.forEach(p => draw(p, colD, SKINS[2]));
+    frame.a.forEach((p, i) => draw(p, colA, SKINS[(i * 2 + 1) % 5], i === frame.carrier || i === frame.receiver));
+    draw(frame.k, keeperColour, SKINS[1], true);
+    c.fillStyle = '#fff'; c.fillRect(frame.b[0] - 1, frame.b[1] - 1, 2, 2);
+    $('#clock').textContent = frame.time + 's';
+  };
+}
+
+function onLiveMessage(message) {
+  const match = liveMatch;
+  if (!match || MP.view !== 'live' || message?.id !== match.game.id) return;
+  const { play, type, data } = message;
+  if (!MP.host && type === 'next' && match.stage === 'outcome' && play === match.play) {
+    if (play + 1 === LIVE_POSSESSIONS) return liveEnd(match);
+    return livePossession(match, play + 1);
+  }
+  if (play !== match.play || match.stage !== 'playing') return;
+  if (type === 'keeper' && match.attacking && Number.isFinite(data)) {
+    match.keeperX = clamp(data, POST_L + 2, POST_R - 2);
+  } else if (type === 'frame' && !match.attacking) {
+    const point = p => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]);
+    if (Array.isArray(data?.a) && data.a.length <= 4 && data.a.every(point) && Array.isArray(data.d) && data.d.length <= 4 && data.d.every(point) && point(data.k) && point(data.b) && Number.isFinite(data.time)) {
+      match.drawDefense?.(data);
+    }
+  } else if (type === 'result' && MP.host && !match.attacking && typeof data === 'string' && Object.hasOwn(LIVE_RESULTS, data)) {
+    liveResolve(match, data);
+  } else if (type === 'outcome' && !MP.host && typeof data === 'string' && Object.hasOwn(LIVE_RESULTS, data)) {
+    liveOutcome(match, data);
+  }
+}
+
+async function liveResolve(match, result) {
+  if (liveMatch !== match || match.stage !== 'playing') return;
+  clearTimeout(match.timer);
+  liveSend(match, 'outcome', result);
+  liveOutcome(match, result);
+  await wait(1000);
+  if (liveMatch !== match) return;
+  liveSend(match, 'next', null);
+  if (match.play + 1 === LIVE_POSSESSIONS) liveEnd(match);
+  else livePossession(match, match.play + 1);
+}
+
+function liveOutcome(match, result) {
+  match.stage = 'outcome';
+  match.stopDefense?.();
+  $('#hint').textContent = '';
+  if (result === 'goal') {
+    match.score[match.attacker]++;
+    $('#s' + match.attacker).textContent = match.score[match.attacker];
+    SFX.goal();
+  } else if (result === 'saved') SFX.save();
+  banner(LIVE_RESULTS[result], '', result === 'goal' ? '' : 'bad');
+}
+
+function liveEnd(match) {
+  MP.view = 'liveEnd';
+  const [home, away] = match.game.players, [a, b] = match.score;
+  const winner = a === b ? null : a > b ? home : away;
+  SFX.whistle(3);
+  render(`<section class="end">
+    <p class="lbl">FULL TIME</p>
+    <h1 class="finish">${winner ? esc(winner.n) + ' WINS!' : 'IT’S A DRAW!'}</h1>
+    <p class="big-score">${code(home.t)} ${a}-${b} ${code(away.t)}</p>
+    <div class="menu row">${endButtons('PLAY AGAIN ▶')}</div>
+  </section>`);
+  wireEnd(() => hostStart({ mode: 'live', players: match.game.players, first: 1 - match.first }));
+}
 
 // ---------- the penalty duel ----------
 let D = null;
@@ -1573,7 +1784,7 @@ function passScreen(name, what) {
   });
 }
 function duelStart(o) {
-  D = { ...o, k: 0, s: [0, 0], log: [], picks: { A: [], B: [] }, busy: false, waiting: false, over: false, missing: 0 };
+  D = { ...o, k: 0, s: [0, 0], log: [] };
   MP.view = 'duel'; duelNext();
 }
 function duelDone() {
@@ -1585,13 +1796,13 @@ const kickDots = side => { const mine = D.log.filter((g, i) => (i % 2 === 0) ===
 function duelScreen() {
   render(`<section class="amatch duel">
     <div class="board"><div class="side" style="${kit(D.A.t)}"><b>${code(D.A.t)}</b></div><div class="score"><b id="s0">${D.s[0]}</b><i>-</i><b id="s1">${D.s[1]}</b><span id="clock">PENS</span></div><div class="side away" style="${kit(D.B.t)}"><b>${code(D.B.t)}</b></div></div>
-    <div class="duel-names"><div><b>${esc(D.A.n)}${D.me === 'A' ? ' (YOU)' : ''}</b><span>${kickDots('A')}</span></div><div><b>${esc(D.B.n)}${D.me === 'B' ? ' (YOU)' : ''}</b><span>${kickDots('B')}</span></div></div>
+    <div class="duel-names"><div><b>${esc(D.A.n)}</b><span>${kickDots('A')}</span></div><div><b>${esc(D.B.n)}</b><span>${kickDots('B')}</span></div></div>
     <div class="arena"><canvas id="cv" aria-label="Penalty duel. Tap in the goal to shoot or dive."></canvas><div class="banner" id="banner"></div></div>
     <p class="hint" id="hint"></p>
     <p class="small center">Aiming near a post is hard to save, but you might miss the target.</p>
-    <div class="menu row"><button class="btn sm" id="quit">${D.local ? '◀ QUIT' : 'LEAVE GAME'}</button></div>
+    <div class="menu row"><button class="btn sm" id="quit">◀ QUIT</button></div>
   </section>`);
-  $('#quit').onclick = () => { if (D?.local) { D = null; multiMenu(); } else multiMenu(); };
+  $('#quit').onclick = multiMenu;
 }
 async function duelNext() {
   if (!D || MP.view !== 'duel') return;
@@ -1600,46 +1811,21 @@ async function duelNext() {
   const k = D.k, id = D.id, sh = shooterOf(k), kp = otherSide(sh), shootT = D[sh].t, keepT = D[kp].t;
   const alive = () => D && D.id === id && D.k === k && MP.view === 'duel';
   idlePen(shootT, keepT, '');
-  banner(k >= 10 ? 'SUDDEN DEATH' : `KICK ${k + 1}`, `${esc(D[sh].n)} SHOOTS · ${esc(D[kp].n)} IN GOAL`, ''); await wait(1200); hideBanner();
+  banner(k >= 10 ? 'SUDDEN DEATH' : `KICK ${k + 1}`, `${esc(D[sh].n)} SHOOTS · ${esc(D[kp].n)} IN GOAL`, ''); await wait(1200);
   if (!alive()) return;
-  if (D.local) {
-    if (k === 0) await passScreen(D[sh].n, 'You shoot first. Pick your spot!');
-    if (!alive()) return;
-    D.picks[sh][k] = await pickOnCanvas('shoot', shootT, keepT);
-    if (!alive()) return;
-    idlePen(shootT, keepT, '');
-    await passScreen(D[kp].n, 'You’re in goal. No peeking at where they shot!');
-    if (!alive()) return;
-    D.picks[kp][k] = await pickOnCanvas('dive', shootT, keepT);
-    if (!alive()) return;
-    return duelResolve(k);
-  }
-  if (D.me) {
-    const x = await pickOnCanvas(D.me === sh ? 'shoot' : 'dive', shootT, keepT);
-    if (!alive()) return;
-    D.picks[D.me][k] = x;
-    MP.room?.presence({ pk: { g: D.id, x: D.picks[D.me].map(v => Math.round(v * 1e4) / 1e4) } }).catch(() => {});
-    D.picks[D.me][k] = Math.round(x * 1e4) / 1e4;
-    idlePen(shootT, keepT, `LOCKED IN. WAITING FOR ${D[otherSide(D.me)].n}…`);
-  } else idlePen(shootT, keepT, 'YOU’RE WATCHING. WAITING FOR BOTH PLAYERS…');
-  D.waiting = true; duelCheck();
+  hideBanner();
+  if (k === 0) await passScreen(D[sh].n, 'You shoot first. Pick your spot!');
+  if (!alive()) return;
+  const aim = await pickOnCanvas('shoot', shootT, keepT);
+  if (!alive()) return;
+  idlePen(shootT, keepT, '');
+  await passScreen(D[kp].n, 'You’re in goal. No peeking at where they shot!');
+  if (!alive()) return;
+  const dive = await pickOnCanvas('dive', shootT, keepT);
+  if (alive()) duelResolve(k, aim, dive);
 }
-function duelCheck() {
-  if (!D || D.local || !MP.room) return;
-  const ps = MP.room.peers();
-  for (const side of ['A', 'B']) {
-    const p = ps.find(q => q.peer === D[side].peer); const pk = p?.presence?.pk;
-    if (pk && typeof pk === 'object' && pk.g === D.id && Array.isArray(pk.x)) pk.x.forEach((v, i) => { if (typeof v === 'number' && isFinite(v) && D.picks[side][i] == null) D.picks[side][i] = clamp(v, -.25, 1.25); });
-  }
-  // a player left mid-duel
-  const gone = ['A', 'B'].some(s => !ps.some(q => q.peer === D[s].peer));
-  if (gone && !D.over) { D.missing ||= Date.now(); if (Date.now() - D.missing > 3000) { D.over = true; return duelGone(); } setTimeout(duelCheck, 3200); } else D.missing = 0;
-  const k = D.k;
-  if (D.waiting && !D.busy && D.picks.A[k] != null && D.picks.B[k] != null) duelResolve(k);
-}
-async function duelResolve(k) {
-  D.busy = true; D.waiting = false; const id = D.id;
-  const sh = shooterOf(k), kp = otherSide(sh), aim = D.picks[sh][k], dive = D.picks[kp][k];
+async function duelResolve(k, aim, dive) {
+  const id = D.id, sh = shooterOf(k), kp = otherSide(sh);
   const a = aim + (hashN(D.seed + ':' + k) - .5) * .12;   // nobody kicks it exactly where they meant to
   const result = a < 0 || a > 1 ? 'wide' : Math.abs(a - dive) < .22 ? 'saved' : 'goal';
   const h = $('#hint'); if (h) h.textContent = '';
@@ -1650,53 +1836,46 @@ async function duelResolve(k) {
   D.log.push(goal);
   const s0 = $('#s' + (sh === 'A' ? 0 : 1)); if (s0) s0.textContent = D.s[sh === 'A' ? 0 : 1];
   banner(goal ? 'GOAL!' : result === 'saved' ? 'SAVED!' : 'MISSED!', goal ? `${esc(D[sh].n)} SCORES` : result === 'saved' ? `${esc(D[kp].n)} GUESSED RIGHT` : `${esc(D[sh].n)} PUT IT WIDE`, goal ? '' : 'bad');
-  await wait(1400); hideBanner();
+  await wait(1400);
   if (!D || D.id !== id) return;
-  D.k++; D.busy = false; duelNext();
+  hideBanner();
+  D.k++; duelNext();
 }
 function duelEnd() {
-  D.over = true; MP.view = 'duelEnd';
-  const w = D.s[0] > D.s[1] ? 'A' : 'B', iWon = D.me ? D.me === w : true;
-  if (iWon) { confetti(); jingle([392, 523, 659, 784, 1047], 110); } else SFX.lose();
+  MP.view = 'duelEnd';
+  const w = D.s[0] > D.s[1] ? 'A' : 'B';
+  confetti(); jingle([392, 523, 659, 784, 1047], 110);
   render(`<section class="end" style="${kit(D[w].t)}">
     <div class="trophy" aria-hidden="true"></div>
     <p class="lbl">PENALTY DUEL</p>
     <h1 class="finish">${esc(D[w].n)} WINS!</h1>
     <p class="big-score">${code(D.A.t)} ${D.s[0]}-${D.s[1]} ${code(D.B.t)}</p>
     <div class="duel-names"><div><b>${esc(D.A.n)}</b><span>${kickDots('A')}</span></div><div><b>${esc(D.B.n)}</b><span>${kickDots('B')}</span></div></div>
-    ${D.me && !iWon ? '<p class="small">Unlucky. Run it back?</p>' : ''}
     <div class="menu row">${endButtons('PLAY AGAIN ▶')}</div>
   </section>`);
-  wireEnd(() => { const o = { ...D }; duelStart({ id: Date.now(), local: true, seed: Math.random(), A: o.B, B: o.A }); }, g => hostStart({ mode: 'duel', A: g.B, B: g.A }));
+  wireEnd(() => duelStart({ id: Date.now(), seed: Math.random(), A: D.B, B: D.A }));
 }
-function duelGone() {
-  MP.view = 'duelEnd';
-  render(`<section class="end"><p class="lbl">PENALTY DUEL</p><h1 class="finish">PLAYER LEFT</h1><p class="small">Someone left the game.</p>
-    <div class="menu row">${MP.host ? '<button class="btn big y" id="tolobby">BACK TO LOBBY</button>' : '<button class="btn big y" id="mpleave">LEAVE</button>'}</div></section>`);
-  wireEnd();
-}
-function wireEnd(localAgain, hostAgain) {
-  const a = $('#again'); const last = D;
-  if (a) a.onclick = () => { if (!MP.room) localAgain?.(); else if (last && hostAgain) hostAgain(last); else if (RC_last) hostStart({ mode: 'race', ta: RC_last.ta, tb: RC_last.tb, dur: RC_last.dur }); };
+function wireEnd(again) {
+  const a = $('#again'); if (a) a.onclick = again;
   const l = $('#tolobby'); if (l) l.onclick = hostToLobby;
   const lv = $('#mpleave'); if (lv) lv.onclick = multiMenu;
   const b = $('#mpback'); if (b) b.onclick = multiMenu;
 }
 
 // ---------- the goal race ----------
-let RC = null, RC_last = null;
-function racePub() { if (RC) MP.room?.presence({ rs: { g: RC.id, goals: RC.goals, tries: RC.tries, done: RC.done } }).catch(() => {}); }
+let RC = null;
+function racePub() { if (RC) MP.room?.update({ rs: { g: RC.id, goals: RC.goals, tries: RC.tries, done: RC.done } }); }
 function raceRows() {
   const mine = myPeer();
-  return mpPeers().map(p => { const rs = p.presence.rs, ok = rs && typeof rs === 'object' && rs.g === RC?.id; return { n: pname(p), t: pteam(p), you: p.peer === mine, goals: ok ? clamp(+rs.goals || 0, 0, 999) : 0, tries: ok ? clamp(+rs.tries || 0, 0, 999) : 0, done: ok && rs.done === true, in: !!ok }; })
-    .filter(r => r.in || r.you).sort((a, b) => b.goals - a.goals || a.tries - b.tries);
+  return mpPeers().map(p => { const rs = p.presence.rs, ok = rs?.g === RC?.id; return { n: pname(p), you: p.peer === mine, goals: ok ? clamp(+rs.goals || 0, 0, 999) : 0, tries: ok ? clamp(+rs.tries || 0, 0, 999) : 0, done: ok && rs.done === true }; })
+    .sort((a, b) => b.goals - a.goals || a.tries - b.tries);
 }
 function raceBoard() {
   const el = $('#rb'); if (!el || !RC) return;
   el.innerHTML = raceRows().map((r, i) => `<li class="${r.you ? 'you' : ''}"><em>${i + 1}</em><span>${esc(r.n)}${r.you ? ' (YOU)' : ''}</span><b>${r.goals}</b>${r.done ? '<small>✔</small>' : ''}</li>`).join('');
 }
 async function raceStart(g) {
-  RC = { id: g.id, ta: g.ta, tb: g.tb, dur: g.dur, goals: 0, tries: 0, done: false, end: 0 }; RC_last = RC; D = null;
+  RC = { id: g.id, ta: g.ta, tb: g.tb, dur: g.dur, goals: 0, tries: 0, done: false, end: 0 }; D = null;
   MP.view = 'race';
   render(`<section class="amatch race">
     <div class="board"><div class="side" style="${kit(g.ta)}"><b>${code(g.ta)}</b></div><div class="score"><b id="s0">0</b><i>/</i><b id="s1">0</b><span id="clock">${g.dur}s</span></div><div class="side away" style="${kit(g.tb)}"><b>${code(g.tb)}</b></div></div>
@@ -1710,15 +1889,19 @@ async function raceStart(g) {
   const id = g.id, alive = () => RC && RC.id === id && MP.view === 'race' && document.querySelector('.race');
   idlePitch(); racePub(); raceBoard();
   for (const n of ['3', '2', '1']) { banner(n, 'GET READY'); blip(660, .08); await wait(800); if (!alive()) return; }
-  banner('GO!'); blip(1320, .15); await wait(350); hideBanner();
+  banner('GO!'); blip(1320, .15); await wait(350);
+  if (!alive()) return;
+  hideBanner();
   RC.end = Date.now() + g.dur * 1000;
   const tick = setInterval(() => { if (!alive()) return clearInterval(tick); const l = Math.max(0, Math.ceil((RC.end - Date.now()) / 1000)), el = $('#clock'); if (el) { el.textContent = l + 's'; el.classList.toggle('low', l <= 10); } }, 200);
   while (alive() && Date.now() < RC.end) {
-    const out = await attackChance({ me: g.ta, opp: g.tb, practice: true });
-    if (!alive()) break;
+    const random = mulberry(hashN(`${g.seed}:${RC.tries}`) * 2 ** 32);
+    const out = await attackChance({ me: g.ta, opp: g.tb, practice: true, random, deadline: RC.end });
+    if (!alive() || !out) break;
     RC.tries++; if (out.result === 'goal') { RC.goals++; SFX.goal(); }
     $('#s0').textContent = RC.goals; $('#s1').textContent = RC.tries; racePub(); raceBoard();
-    banner(out.result === 'goal' ? 'GOAL!' : out.result.toUpperCase() + '!', Date.now() < RC.end ? `${RC.goals} SO FAR` : 'TIME!', out.result === 'goal' ? '' : 'bad'); await wait(550); hideBanner();
+    banner(out.result === 'goal' ? 'GOAL!' : out.result.toUpperCase() + '!', Date.now() < RC.end ? `${RC.goals} SO FAR` : 'TIME!', out.result === 'goal' ? '' : 'bad'); await wait(550);
+    if (alive()) hideBanner();
   }
   clearInterval(tick);
   if (!RC || RC.id !== id || MP.view !== 'race') return;
@@ -1726,18 +1909,18 @@ async function raceStart(g) {
 }
 function raceEnd() {
   MP.view = 'raceEnd';
-  const rows = raceRows(), all = rows.every(r => r.done), top = rows[0];
+  const rows = raceRows(), all = rows.length === 2 && rows.every(r => r.done), top = rows[0];
   const win = all && top && top.you && !(rows[1] && rows[1].goals === top.goals);
   if (win && !RC.cheered) { RC.cheered = true; confetti(); jingle([392, 523, 659, 784, 1047], 110); }
   render(`<section class="end career-sec">
     ${all ? '<div class="trophy" aria-hidden="true"></div>' : ''}
     <p class="lbl">GOAL RACE · ${code(RC.ta)} V ${code(RC.tb)}</p>
     <h1 class="finish">${all ? (rows.length > 1 && rows[1].goals === top.goals ? 'IT’S A TIE!' : `${esc(top.n)} WINS!`) : 'TIME!'}</h1>
-    <p class="small">${all ? 'Final results' : 'Waiting for everyone to finish their last chance…'}</p>
+    <p class="small">${all ? 'Final results' : 'Waiting for your opponent to finish…'}</p>
     <article class="box"><ol class="gb">${rows.map((r, i) => `<li class="${r.you ? 'you' : ''}"><em>${i + 1}</em><span>${esc(r.n)}${r.you ? ' (YOU)' : ''}</span><small>${r.tries} TRIES${r.done ? '' : ' · PLAYING'}</small><b>${r.goals}</b></li>`).join('')}</ol></article>
-    <div class="menu row">${endButtons('PLAY AGAIN ▶')}</div>
+    <div class="menu row">${all ? endButtons('PLAY AGAIN ▶') : '<button class="btn" id="mpleave">LEAVE</button>'}</div>
   </section>`);
-  D = null; wireEnd();
+  wireEnd(() => hostStart({ mode: 'race', ta: RC.ta, tb: RC.tb, dur: RC.dur }));
 }
 
 // ---------- practice: endless chances against a random team ----------
